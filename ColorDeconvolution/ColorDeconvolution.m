@@ -15,7 +15,18 @@
 BeginPackage["ColorDeconvolution`"];
 (* Exported symbols added here with SymbolName::usage *)
 
+CreateStainingKernel::usage = "CreateStainingKernel[Staining[..]] or CreateStainingKernel[{_Dye, ..}]";
+Staining::usage = "Staining[name] a set of predefined stainings";
+
 Begin["`Private`"];
+
+$compileTarget = "C";
+Quiet[
+  Check[
+    Compile[{}, 1, CompilationTarget -> $compileTarget],
+    $compileTarget = "MVM"
+  ]
+];
 
 Dye["Hematoxylin"] = Dye[{0.644211, 0.716556, 0.266844}];
 Dye["Hematoxylin2"] = Dye[{0.490157, 0.768971, 0.410402}];
@@ -77,7 +88,7 @@ ColorDeconvolution[img_Image, stain : {_Dye..}, opts : OptionsPattern[]] := Modu
     Return[$Failed]
   ];
   data = ImageData[img, "Real", Interleaving -> True];
-  kernel = createStainingKernel[stain];
+  kernel = CreateStainingKernel[stain];
   If[kernel =!= $Failed,
     Return[iColorDeconvolution[data, kernel, opts]]
   ];
@@ -95,14 +106,45 @@ iColorDeconvolution[data_, kernel_] := Module[
 
 ];
 
-createStainingKernel[stain : {_Dye..}] := Module[
+CreateStainingKernel::sing = "At least one Dye as only zero entries.";
+CreateStainingKernel::count = "1-3 colors need to be specified.";
+CreateStainingKernel[stain : {Dye_}] := CreateStainingKernel[Identity @@@ stain];
+CreateStainingKernel[{vec_?VectorQ}] := With[
   {
-    n = Length[stain]
+    v = Normalize[vec]
   },
-  Switch[n,
-    1,
+  CreateStainingKernel[{v, RotateLeft[v]}] /; Norm[v] != 0.0
+];
+CreateStainingKernel[{v1_?VectorQ, v2_VectorQ}] := With[
+  {
+    vv1 = Normalize[v1],
+    vv2 = Normalize[v2]
+  },
+  CreateStainingKernel[{vv1, vv2, Min[0.0, #]& /@ (1 - (vv1^2 + vv2^2))}]
+];
+CreateStainingKernel[m : {v1_?VectorQ, v2_?VectorQ, v3_?VectorQ}] := Module[
+  {
 
-  ]
+  },
+  Normalize /@ m
+];
+
+CreateStainingKernel[stain : {_Dye..}] := Module[
+  {
+    n = Length[stain],
+    dyes
+  },
+  If[Min[#.#& @@@ stain] == 0.0,
+    Message[CreateStainingKernel::sing];
+    Return[$Failed];
+  ];
+
+  If[stain === {} || Length[stain] > 3,
+    Message[CreateStainingKernel::count];
+    Return[$Failed]
+  ];
+
+  CreateStainingKernel[Identity @@@ stain]
 ];
 
 odC = Compile[{{pixel, _Real, 1}, {i0, _Real, 1}},
@@ -114,13 +156,14 @@ odC = Compile[{{pixel, _Real, 1}, {i0, _Real, 1}},
   ],
   RuntimeAttributes -> {Listable},
   Parallelization -> True,
-  CompilationTarget -> "C"
+  CompilationTarget -> $compileTarget
 ];
 
 applyKernelC = Compile[{{pixel, _Real, 1}, {kernel, _Real, 2}},
   kernel.pixel,
   RuntimeAttributes -> {Listable},
-  Parallelization -> True
+  Parallelization -> True,
+  CompilationTarget -> $compileTarget
 ];
 
 calculateWhitePoint[data_] := Module[{pixel, dx, dy},
