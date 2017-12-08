@@ -241,7 +241,7 @@ compileKernel[kernel_?(MatrixQ[#, NumericQ]&)] := Compile[{{pixel, _Real, 1}},
 calculateWhitePoint[data_] := Module[{pixel, dx, dy},
 (* We don't use every pixel for the estimation. When image are large, we select ever dx, dy pixel *)
   {dy, dx} = Max[#, 1]& /@ Round[Log[100, Most@Dimensions[data]]];
-  Median[Take[Reverse[SortBy[Flatten[data, 1], Total], 10]]]
+  Median[Take[Reverse[SortBy[Flatten[data[[;; ;; dy, ;; ;; dx]], 1], Total], 10]]]
 ];
 
 End[]; (* `Private` *)
