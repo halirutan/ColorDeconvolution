@@ -152,47 +152,85 @@ iColorDeconvolution[data_?(TensorQ[#, NumericQ]&), kernel_CompiledFunction, whit
   kernel[odData]
 ];
 
-CreateStainingKernel::sing = "At least one Dye as only zero entries.";
-CreateStainingKernel::count = "1-3 colors need to be specified.";
-CreateStainingKernel[stain : {Dye_}] := CreateStainingKernel[Identity @@@ stain];
-CreateStainingKernel[{vec_?VectorQ}] := With[
+ColorDeconvolutionResult[data_List, __][n_ /; 1 <= n <= 3] := Image[data[[n]], "Real"];
+ColorDeconvolutionResult[_, od_, _]["OD"] := Image[od, "Real"];
+ColorDeconvolutionResult[data_List, _, PrecompiledKernel[_, colors_List]][n_ /; 1 <= n <= 3, Colorize] := colorizeStaining[data[[n]], colors[[n]]];
+
+
+CompileStainingKernel[stain : {_Dye..}] := Module[
+  {
+    kernel = FillStainingKernel[stain],
+    invKernel,
+    result = $Failed
+  },
+  If[MatrixQ[kernel, NumericQ],
+    invKernel = Inverse[kernel];
+    If[MatrixQ[invKernel, NumericQ],
+      result = PrecompiledKernel[compileKernel[invKernel], Dye /@ kernel]
+    ]
+  ];
+  result
+];
+
+VisualiseStaining[PrecompiledKernel[_, stain_]] := VisualiseStaining[stain];
+VisualiseStaining[dyes : {_Dye..}] := Graphics[
+  Table[{RGBColor[1 - #] & @@ dyes[[i]], Rectangle[{i, 0}]}, {i,
+    Length[dyes]}]
+];
+
+colorizeStaining[data_, Dye[col_]] := With[
+  {
+    h = First[ColorConvert[RGBColor[1 - col], "HSB"]]
+  },
+  Image[
+    Compile[{{pixel, _Real, 0}},
+      {h, pixel, 1},
+      Parallelization -> True,
+      RuntimeAttributes -> {Listable}
+    ][Rescale@data],
+    ColorSpace -> "HSB"
+  ]
+];
+
+FillStainingKernel::sing = "At least one Dye as only zero entries.";
+FillStainingKernel::count = "1-3 colors need to be specified.";
+FillStainingKernel[stain : {_Dye}] := FillStainingKernel[Identity @@@ stain];
+FillStainingKernel[{vec_?VectorQ}] := With[
   {
     v = Normalize[vec]
   },
-  CreateStainingKernel[{v, RotateLeft[v]}] /; Norm[v] != 0.0
+  FillStainingKernel[{v, RotateLeft[v]}] /; Norm[v] != 0.0
 ];
-CreateStainingKernel[{v1_?VectorQ, v2_?VectorQ}] := With[
+FillStainingKernel[{v1_?VectorQ, v2_?VectorQ}] := With[
   {
     vv1 = Normalize[v1],
     vv2 = Normalize[v2]
   },
-  CreateStainingKernel[{vv1, vv2, Max[0.0, #]& /@ (1 - (vv1^2 + vv2^2))}]
+  FillStainingKernel[{vv1, vv2, Max[0.0, #]& /@ (1 - (vv1^2 + vv2^2))}]
 ];
-CreateStainingKernel[m : {v1_?VectorQ, v2_?VectorQ, v3_?VectorQ}] := Module[
+FillStainingKernel[m : {v1_?VectorQ, v2_?VectorQ, v3_?VectorQ}] := Module[
   {
 
   },
-  Inverse[
-    Normalize /@ m
-  ]
+  Normalize /@ m
 ];
 
-CreateStainingKernel[stain : {_Dye..}] := Module[
+FillStainingKernel[stain : {_Dye..}] := Module[
   {
     n = Length[stain],
     dyes
   },
   If[Min[#.#& @@@ stain] == 0.0,
-    Message[CreateStainingKernel::sing];
+    Message[FillStainingKernel::sing];
     Return[$Failed];
   ];
 
   If[stain === {} || Length[stain] > 3,
-    Message[CreateStainingKernel::count];
+    Message[FillStainingKernel::count];
     Return[$Failed]
   ];
 
-  CreateStainingKernel[Identity @@@ stain]
+  FillStainingKernel[Identity @@@ stain]
 ];
 
 odC = Compile[{{pixel, _Real, 1}, {whitePoint, _Real, 1}, {blackPoint, _Real, 1}},
@@ -217,7 +255,7 @@ compileKernel[kernel_?(MatrixQ[#, NumericQ]&)] := Compile[{{pixel, _Real, 1}},
 calculateWhitePoint[data_] := Module[{pixel, dx, dy},
 (* We don't use every pixel for the estimation. When image are large, we select ever dx, dy pixel *)
   {dy, dx} = Max[#, 1]& /@ Round[Log[100, Most@Dimensions[data]]];
-  Median[Take[Reverse[SortBy[Flatten[data[[;; ;; dy, ;; ;; dx]], 1], Total], 100]]]
+  Median[Take[Reverse[SortBy[Flatten[data[[;; ;; dy, ;; ;; dx]], 1], Total], 10]]]
 ];
 
 End[]; (* `Private` *)
