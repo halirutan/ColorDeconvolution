@@ -18,9 +18,16 @@ BeginPackage["ColorDeconvolution`"];
 ColorDeconvolution::usage = "ColorDeconvolution[img, Staining[\"stain-name\"]] creates a color deconvolution regarding the colors" <>
     "given in the staining.";
 CreateStainingKernel::usage = "CreateStainingKernel[Staining[..]] or CreateStainingKernel[{_Dye, ..}]";
+ColorDeconvolutionWhiteImage::usage = "ColorDeconvolutionWhiteImage is an option for ColorDeconvolution. " <>
+    "It is used to equalize the brightness and remove incoherent lighting." <>
+    "Can be None, Automatic or an Image with the same specification as the input image. " <>
+    "Setting None will effectively use a white point of 1. Automatic will try to calculate the brightest point from the image by " <>
+    "taking a small sample of pixels. Supplying an Image that was taken with the same Microscope settings works best.";
+ColorDeconvolutionBlackImage::usage = "ColorDeconvolutionWhiteImage is an option for ColorDeconvolution. " <>
+    "It is used to remove camera pixel defects and should be acquired with the camera light-path closed on the microscope." <>
+    "Can be None or an Image with the same specifications as the input image. "
 Staining::usage = "Staining[name] a set of predefined stainings";
-Dye::usage = "Dye[{r,g,b}] defines the (subtractive) color value for one specific dye. This can included in a Staining, \
-which consists of 1-3 dyes.";
+Dye::usage = "Dye[{r,g,b}] defines the (subtractive) color value for one specific dye. This can included in a Staining, which consists of 1-3 dyes.";
 
 Begin["`Private`"];
 
@@ -59,74 +66,89 @@ Staining["Brilliant Blue"] = {Dye[{0.314655, 0.66024, 0.681965}], Dye[{0.383573,
 Staining["RGB"] = {Dye[{0., 1., 1.}], Dye[{1., 0., 1.}], Dye[{1., 1., 0.}]};
 Staining["CMY"] = {Dye[{1., 0., 0.}], Dye[{0., 1., 0.}], Dye[{0., 0., 1.}]};
 
-$stainingNames = {
-  "H&E",
-  "H&E 2",
-  "H DAB",
-  "Feulgen Light Green",
-  "Giemsa",
-  "FastRed FastBlue DAB",
-  "Methyl Green DAB",
-  "H&E DAB",
-  "H AEC",
-  "Azan-Mallory",
-  "Masson Trichrome",
-  "Alcian Blue & H",
-  "H PAS",
-  "Brilliant Blue",
-  "RGB",
-  "CMY"
-};
 
-$dyeNames = {
-  "Hematoxylin",
-  "Hematoxylin2",
-  "Eosin",
-  "Eosin2",
-  "Alcian Blue",
-  "DAB",
-  "PAS",
-  "Fast Red"
-};
-
+(* Adding completion for the built-in dye- and staining-names *)
+$stainingNames = Keys[DownValues[Staining]][[All, 1, 1]];
+$dyeNames = Keys[DownValues[Dye]][[All, 1, 1]];
 addCompletions[arg_] := FE`Evaluate[FEPrivate`AddSpecialArgCompletion[arg]];
-
 addCompletions["Dye" -> {$dyeNames}];
 addCompletions["Staining" -> {$stainingNames}];
 
-ColorDeconvolution[img_Image, stain : {_Dye..} | _CompiledFunction, opts : OptionsPattern[]] := Module[
+ColorDeconvolutionResult[data_, kernel_]["ColoredImages"] := Null;
+ColorDeconvolutionResult[data_, kernel_]["Images"] := Null;
+ColorDeconvolutionResult[data_, kernel_]["ColoredImages"] := Null;
+ColorDeconvolutionResult[data_, kernel_]["ColoredImages"] := Null;
+Format[ColorDeconvolutionResult[data_, __]] := ColorDeconvolutionResult[Dimensions[data]];
+
+validImageQ[img_Image] := ImageChannels[img] === 3 && ImageColorSpace[img] =!= "RGB";
+validImageQ[___] := False;
+
+Options[ColorDeconvolution] = {
+  ColorDeconvolutionWhiteImage -> None,
+  ColorDeconvolutionBlackImage -> None
+};
+
+ColorDeconvolution::wimg = "The `` must have 3 channels and in RGB color-space.";
+ColorDeconvolution::wimgRef = "The `` must have 3 channels and in RGB color-space and be of the same size than the input image.";
+ColorDeconvolution::wstain = "The staining must consist of exactly 3 dyes";
+ColorDeconvolution[img_Image, stain : {_Dye..}, opts : OptionsPattern[]] := Module[
   {
-    data, kernel
+    data, kernel, kernelC, whiteImage, blackImage
   },
-  If[ImageChannels[img] =!= 3 && ImageColorSpace[img] =!= "RGB",
-    Message[ColorDeconvolution::wimg];
+  If[Not[validImageQ[img]],
+    Message[ColorDeconvolution::wimg, "input image"];
     Return[$Failed]
   ];
   If[stain === {} || Length[stain] > 3,
     Message[ColorDeconvolution::wstain];
     Return[$Failed]
   ];
-  data = ImageData[img, "Real", Interleaving -> True];
-  If[Head[stain] === List,
-    kernel = CreateStainingKernel[stain];
-    If[kernel =!= $Failed,
-      kernel = compileKernel[kernel];
-    ],
-  (* else, stain is already a compiled kernel *)
-    kernel = stain
+
+  whiteImage = OptionValue[ColorDeconvolutionWhiteImage];
+  If[(whiteImage =!= Automatic || whiteImage =!= None) && !validImageQ[whiteImage] && ImageDimensions[img] =!= ImageDimensions[whiteImage],
+    Message[ColorDeconvolution::wimgRef, "White Image"];
+    whiteImage = None;
   ];
-  data = iColorDeconvolution[data, kernel];
-  Image /@ Transpose[data, {2, 3, 1}]
+
+  blackImage = OptionValue[ColorDeconvolutionBlackImage];
+  If[blackImage =!= None && !validImageQ[blackImage] && ImageDimensions[img] =!= ImageDimensions[blackImage],
+    Message[ColorDeconvolution::wimgRef, "White Image"];
+    blackImage = None
+  ];
+
+  data = ImageData[img, "Real", Interleaving -> True];
+  kernel = CreateStainingKernel[stain];
+  If[kernel =!= $Failed,
+    kernelC = compileKernel[kernel];
+  ];
+  data = iColorDeconvolution[data, kernelC, whiteImage, blackImage];
+  ColorDeconvolutionResult[Transpose[data, {2, 3, 1}], stain, kernel]
 ];
 
-iColorDeconvolution[data_?(TensorQ[#, NumericQ]&), kernel_CompiledFunction] := Module[
+iColorDeconvolution[data_?(TensorQ[#, NumericQ]&), kernel_CompiledFunction, whiteImage_, blackImage_] := Module[
   {
     odData,
-    whitePoint,
-    c
+    white,
+    black
   },
-  whitePoint = calculateWhitePoint[data];
-  odData = odC[data, whitePoint];
+  Switch[
+    whiteImage,
+    _Image,
+    whiteImage = ImageData[whiteImage, "Real", Interleaving -> True],
+    Automatic,
+    whiteImage = calculateWhitePoint[data],
+    None,
+    whiteImage = {1.0, 1.0, 1.0}
+  ];
+
+  Switch[
+    blackImage,
+    _Image,
+    blackImage = ImageData[blackImage, "Real", Interleaving -> True],
+    None,
+    blackImage = {0.0, 0.0, 0.0}
+  ];
+  odData = odC[data, whiteImage, blackImage];
   kernel[odData]
 ];
 
@@ -173,12 +195,12 @@ CreateStainingKernel[stain : {_Dye..}] := Module[
   CreateStainingKernel[Identity @@@ stain]
 ];
 
-odC = Compile[{{pixel, _Real, 1}, {i0, _Real, 1}},
+odC = Compile[{{pixel, _Real, 1}, {whitePoint, _Real, 1}, {blackPoint, _Real, 1}},
   With[
     {
       eps = 10.^-5
     },
-    -Log[10.0, Max[#, eps] & /@ pixel / i0]
+    -Log[10.0, Max[#, eps] & /@ (pixel - blackPoint) / whitePoint]
   ],
   RuntimeAttributes -> {Listable},
   Parallelization -> True,
