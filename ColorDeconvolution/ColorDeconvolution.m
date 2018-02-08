@@ -18,19 +18,28 @@ BeginPackage["ColorDeconvolution`"];
 ColorDeconvolution::usage = "ColorDeconvolution[img, Staining[\"stain-name\"]] creates a color deconvolution regarding the colors" <>
     "given in the staining.";
 CreateStainingKernel::usage = "CreateStainingKernel[Staining[..]] or CreateStainingKernel[{_Dye, ..}]";
-ColorDeconvolutionWhiteImage::usage = "ColorDeconvolutionWhiteImage is an option for ColorDeconvolution. " <>
+CompileStainingKernel::usage = "CompileStainingKernel[staining | { _Dye..}] creates a pre-compiled staining kernel that can be used in " <>
+    "in successive runs of ColorDeconvolution. ";
+PrecompiledColorDeconvolutionKernel::usage = "PrecompiledColorDeconvolutionKernel is an object returned by CompileStainingKernel and can be used for repeated calls to ColorDeconvolution.";
+BrightField::usage = "BrightField is an option for ColorDeconvolution. " <>
     "It is used to equalize the brightness and remove incoherent lighting." <>
     "Can be None, Automatic or an Image with the same specification as the input image. " <>
     "Setting None will effectively use a white point of 1. Automatic will try to calculate the brightest point from the image by " <>
     "taking a small sample of pixels. Supplying an Image that was taken with the same Microscope settings works best.";
-ColorDeconvolutionBlackImage::usage = "ColorDeconvolutionWhiteImage is an option for ColorDeconvolution. " <>
+DarkField::usage = "DarkField is an option for ColorDeconvolution. " <>
     "It is used to remove camera pixel defects and should be acquired with the camera light-path closed on the microscope." <>
-    "Can be None or an Image with the same specifications as the input image. "
+    "Can be None or an Image with the same specifications as the input image. ";
+ClipData::usage = "ClipData is an option for ColorDeconvolution. If set to True, the deconvolution result is clipped to the range of [0,1].";
+ColorDeconvolutionResult::usage = "ColorDeconvolutionResult[...] is an object that contains the result from a ColorDeconvolution.";
 Staining::usage = "Staining[name] a set of predefined stainings";
 Dye::usage = "Dye[{r,g,b}] defines the (subtractive) color value for one specific dye. This can included in a Staining, which consists of 1-3 dyes.";
+ColorDeconvolutionKernelizer::usage = "ColorDeconvolutionKernelizer[img, precompiledKernel, opts] creates a dynamic view for adjusting dye colors.";
+
+
 
 Begin["`Private`"];
 
+(* Set compilation target depending on whether we find a working C compiler *)
 $compileTarget = "C";
 Quiet[
   Check[
@@ -66,6 +75,8 @@ Staining["Brilliant Blue"] = {Dye[{0.314655, 0.66024, 0.681965}], Dye[{0.383573,
 Staining["RGB"] = {Dye[{0., 1., 1.}], Dye[{1., 0., 1.}], Dye[{1., 1., 0.}]};
 Staining["CMY"] = {Dye[{1., 0., 0.}], Dye[{0., 1., 0.}], Dye[{0., 0., 1.}]};
 
+Staining["AlcianBlue & H Luisa"] = {Dye[{0.7622531066123409`, 0.6472667159256441`, 0.003999989333341867`}], Dye[{0.4066847930872072`, 0.8110391089785727`, 0.4205033207703107`}], Dye[{0.45181280070179025`, 0.`, 0.8921127692853659`}]};
+
 
 (* Adding completion for the built-in dye- and staining-names *)
 $stainingNames = Keys[DownValues[Staining]][[All, 1, 1]];
@@ -74,55 +85,70 @@ addCompletions[arg_] := FE`Evaluate[FEPrivate`AddSpecialArgCompletion[arg]];
 addCompletions["Dye" -> {$dyeNames}];
 addCompletions["Staining" -> {$stainingNames}];
 
-ColorDeconvolutionResult[data_, kernel_]["ColoredImages"] := Null;
-ColorDeconvolutionResult[data_, kernel_]["Images"] := Null;
-ColorDeconvolutionResult[data_, kernel_]["ColoredImages"] := Null;
-ColorDeconvolutionResult[data_, kernel_]["ColoredImages"] := Null;
-Format[ColorDeconvolutionResult[data_, __]] := ColorDeconvolutionResult[Dimensions[data]];
+(* Nice rendering of precompiled kernel *)
+ColorDeconvolutionResult /:
+    MakeBoxes[cd : ColorDeconvolutionResult[data_, kernel_], form : (StandardForm | TraditionalForm)] :=
+    BoxForm`ArrangeSummaryBox[
+      ColorDeconvolutionResult,
+      Null,
+      ColorDeconvolution`Private`VisualiseStaining[kernel],
+      {
+        BoxForm`SummaryItem[{"Image Dimension: ", Reverse@Dimensions[First[data]]}]
+      },
+      {},
+      form
+    ];
 
-validImageQ[img_Image] := ImageChannels[img] === 3 && ImageColorSpace[img] =!= "RGB";
+ColorDeconvolutionResult[data_List, _][n_ /; 1 <= n <= 3] := Image[data[[n]], "Real"];
+ColorDeconvolutionResult[data_List, PrecompiledColorDeconvolutionKernel[_, colors_List]][n_ /; 1 <= n <= 3, Colorize] := colorizeStaining[data[[n]], colors[[n]]];
+ColorDeconvolutionResult[_List, kernel_]["Kernel"] := kernel;
+
+validImageQ[img_Image] := ImageChannels[img] === 3 && ImageColorSpace[img] === "RGB";
 validImageQ[___] := False;
 
 Options[ColorDeconvolution] = {
-  ColorDeconvolutionWhiteImage -> None,
-  ColorDeconvolutionBlackImage -> None
+  BrightField -> None,
+  DarkField -> None,
+  ClipData -> True
 };
 
 ColorDeconvolution::wimg = "The `` must have 3 channels and in RGB color-space.";
 ColorDeconvolution::wimgRef = "The `` must have 3 channels and in RGB color-space and be of the same size than the input image.";
 ColorDeconvolution::wstain = "The staining must consist of exactly 3 dyes";
-ColorDeconvolution[img_Image, stain : {_Dye..}, opts : OptionsPattern[]] := Module[
+ColorDeconvolution[img_Image, stain : {_Dye..}, opts : OptionsPattern[]] := Module[{},
+  If[stain === {} || Length[stain] > 3,
+    Message[ColorDeconvolution::wstain];
+    Return[$Failed]
+  ];
+  ColorDeconvolution[img, CompileStainingKernel[stain], opts]
+];
+ColorDeconvolution[img_Image, kernel_PrecompiledColorDeconvolutionKernel, opts : OptionsPattern[]] := Module[
   {
-    data, kernel, kernelC, whiteImage, blackImage
+    data, whiteImage, blackImage
   },
   If[Not[validImageQ[img]],
     Message[ColorDeconvolution::wimg, "input image"];
     Return[$Failed]
   ];
-  If[stain === {} || Length[stain] > 3,
-    Message[ColorDeconvolution::wstain];
-    Return[$Failed]
-  ];
 
-  whiteImage = OptionValue[ColorDeconvolutionWhiteImage];
-  If[(whiteImage =!= Automatic || whiteImage =!= None) && !validImageQ[whiteImage] && ImageDimensions[img] =!= ImageDimensions[whiteImage],
+  whiteImage = OptionValue[BrightField];
+  If[(whiteImage =!= Automatic && whiteImage =!= None) && !validImageQ[whiteImage] && ImageDimensions[img] =!= ImageDimensions[whiteImage],
     Message[ColorDeconvolution::wimgRef, "White Image"];
     whiteImage = None;
   ];
 
-  blackImage = OptionValue[ColorDeconvolutionBlackImage];
+  blackImage = OptionValue[DarkField];
   If[blackImage =!= None && !validImageQ[blackImage] && ImageDimensions[img] =!= ImageDimensions[blackImage],
     Message[ColorDeconvolution::wimgRef, "White Image"];
     blackImage = None
   ];
 
   data = ImageData[img, "Real", Interleaving -> True];
-  kernel = CreateStainingKernel[stain];
-  If[kernel =!= $Failed,
-    kernelC = compileKernel[kernel];
+  data = iColorDeconvolution[data, First[kernel], whiteImage, blackImage];
+  If[TrueQ[OptionValue[ClipData]],
+    data = Clip[data, {0, 1}];
   ];
-  data = iColorDeconvolution[data, kernelC, whiteImage, blackImage];
-  ColorDeconvolutionResult[Transpose[data, {2, 3, 1}], stain, kernel]
+  ColorDeconvolutionResult[Transpose[data, {2, 3, 1}], kernel]
 ];
 
 iColorDeconvolution[data_?(TensorQ[#, NumericQ]&), kernel_CompiledFunction, whiteImage_, blackImage_] := Module[
@@ -134,45 +160,40 @@ iColorDeconvolution[data_?(TensorQ[#, NumericQ]&), kernel_CompiledFunction, whit
   Switch[
     whiteImage,
     _Image,
-    whiteImage = ImageData[whiteImage, "Real", Interleaving -> True],
+    white = ImageData[whiteImage, "Real", Interleaving -> True],
     Automatic,
-    whiteImage = calculateWhitePoint[data],
+    white = calculateWhitePoint[data],
     None,
-    whiteImage = {1.0, 1.0, 1.0}
+    white = {1.0, 1.0, 1.0}
   ];
 
   Switch[
     blackImage,
     _Image,
-    blackImage = ImageData[blackImage, "Real", Interleaving -> True],
+    black = ImageData[blackImage, "Real", Interleaving -> True],
     None,
-    blackImage = {0.0, 0.0, 0.0}
+    black = {0.0, 0.0, 0.0}
   ];
-  odData = odC[data, whiteImage, blackImage];
+  odData = odC[data, white, black];
   kernel[odData]
 ];
 
-ColorDeconvolutionResult[data_List, __][n_ /; 1 <= n <= 3] := Image[data[[n]], "Real"];
-ColorDeconvolutionResult[_, od_, _]["OD"] := Image[od, "Real"];
-ColorDeconvolutionResult[data_List, _, PrecompiledKernel[_, colors_List]][n_ /; 1 <= n <= 3, Colorize] := colorizeStaining[data[[n]], colors[[n]]];
-
-
 CompileStainingKernel[stain : {_Dye..}] := Module[
   {
-    kernel = FillStainingKernel[stain],
+    kernel = CreateStainingKernel[stain],
     invKernel,
     result = $Failed
   },
   If[MatrixQ[kernel, NumericQ],
     invKernel = Inverse[kernel];
     If[MatrixQ[invKernel, NumericQ],
-      result = PrecompiledKernel[compileKernel[invKernel], Dye /@ kernel]
+      result = PrecompiledColorDeconvolutionKernel[compileKernel[invKernel], Dye /@ kernel]
     ]
   ];
   result
 ];
 
-VisualiseStaining[PrecompiledKernel[_, stain_]] := VisualiseStaining[stain];
+VisualiseStaining[PrecompiledColorDeconvolutionKernel[_, stain_]] := VisualiseStaining[stain];
 VisualiseStaining[dyes : {_Dye..}] := Graphics[
   Table[{RGBColor[1 - #] & @@ dyes[[i]], Rectangle[{i, 0}]}, {i,
     Length[dyes]}]
@@ -192,53 +213,69 @@ colorizeStaining[data_, Dye[col_]] := With[
   ]
 ];
 
-FillStainingKernel::sing = "At least one Dye as only zero entries.";
-FillStainingKernel::count = "1-3 colors need to be specified.";
-FillStainingKernel[stain : {_Dye}] := FillStainingKernel[Identity @@@ stain];
-FillStainingKernel[{vec_?VectorQ}] := With[
+(* Nice rendering of precompiled kernel *)
+PrecompiledColorDeconvolutionKernel /:
+    MakeBoxes[kernel : PrecompiledColorDeconvolutionKernel[f_, dyes_], form : (StandardForm | TraditionalForm)] :=
+    BoxForm`ArrangeSummaryBox[
+      PrecompiledColorDeconvolutionKernel,
+      kernel,
+      ColorDeconvolution`Private`VisualiseStaining[kernel],
+      {
+        BoxForm`SummaryItem[{"Colors: ", Length[dyes]}]
+      },
+      Table[BoxForm`SummaryItem[{"C" <> ToString[i] <> ": ",
+        ToString@dyes[[i, 1]]}], {i, Length[dyes]}],
+      form
+    ];
+
+CreateStainingKernel::sing = "At least one Dye as only zero entries.";
+CreateStainingKernel::count = "1-3 colors need to be specified.";
+CreateStainingKernel[stain : {_Dye}] := CreateStainingKernel[Identity @@@ stain];
+CreateStainingKernel[{vec_?VectorQ}] := With[
   {
     v = Normalize[vec]
   },
-  FillStainingKernel[{v, RotateLeft[v]}] /; Norm[v] != 0.0
+  CreateStainingKernel[{v, RotateLeft[v]}] /; Norm[v] != 0.0
 ];
-FillStainingKernel[{v1_?VectorQ, v2_?VectorQ}] := With[
+CreateStainingKernel[{v1_?VectorQ, v2_?VectorQ}] := With[
   {
     vv1 = Normalize[v1],
     vv2 = Normalize[v2]
   },
-  FillStainingKernel[{vv1, vv2, Max[0.0, #]& /@ (1 - (vv1^2 + vv2^2))}]
+  CreateStainingKernel[{vv1, vv2, Max[0.0, #]& /@ (1 - (vv1^2 + vv2^2))}]
 ];
-FillStainingKernel[m : {v1_?VectorQ, v2_?VectorQ, v3_?VectorQ}] := Module[
+CreateStainingKernel[m : {v1_?VectorQ, v2_?VectorQ, v3_?VectorQ}] := Module[
   {
 
   },
   Normalize /@ m
 ];
 
-FillStainingKernel[stain : {_Dye..}] := Module[
+CreateStainingKernel[stain : {_Dye..}] := Module[
   {
     n = Length[stain],
     dyes
   },
   If[Min[#.#& @@@ stain] == 0.0,
-    Message[FillStainingKernel::sing];
+    Message[CreateStainingKernel::sing];
     Return[$Failed];
   ];
 
   If[stain === {} || Length[stain] > 3,
-    Message[FillStainingKernel::count];
+    Message[CreateStainingKernel::count];
     Return[$Failed]
   ];
-
-  FillStainingKernel[Identity @@@ stain]
+  CreateStainingKernel[Identity @@@ stain]
 ];
 
-odC = Compile[{{pixel, _Real, 1}, {whitePoint, _Real, 1}, {blackPoint, _Real, 1}},
+
+
+odC = Compile[{{pixel, _Real, 1}, {brightField, _Real, 1}, {darkField, _Real, 1}},
   With[
     {
       eps = 10.^-5
     },
-    -Log[10.0, Max[#, eps] & /@ (pixel - blackPoint) / whitePoint]
+    -Log[10.0, Max[#, eps] & /@ (pixel - darkField) / ( brightField - darkField)]
   ],
   RuntimeAttributes -> {Listable},
   Parallelization -> True,
@@ -257,6 +294,70 @@ calculateWhitePoint[data_] := Module[{pixel, dx, dy},
   {dy, dx} = Max[#, 1]& /@ Round[Log[100, Most@Dimensions[data]]];
   Median[Take[Reverse[SortBy[Flatten[data[[;; ;; dy, ;; ;; dx]], 1], Total], 10]]]
 ];
+
+(* ::Section:: *)
+(* Dynamic Functions *)
+
+toRGBTriple[{phi_, theta_}] := {Cos[phi] Cos[theta], Cos[theta] Sin[phi], Sin[theta]};
+toRGBTripleInv[{phi_, theta_}] := 1 - toRGBTriple[{phi, theta}];
+fromRGBTriple[{r_, g_, b_}] := {ArcTan[r, g], Pi / 2 - ArcTan[b, Sqrt[g^2 + r^2]]};
+
+With[
+  {
+    backGr = RegionPlot[ 0 <= x <= Pi / 2 && 0 <= y <= Pi / 2, {x, 0, Pi / 2}, {y, 0, Pi / 2},
+      ColorFunction -> Function[{phi, theta}, RGBColor @@ toRGBTripleInv[{phi, theta}]],
+      ColorFunctionScaling -> False,
+      Frame -> False,
+      ImageSize -> 512,
+      PlotRangePadding -> None, ImagePadding -> None]
+  },
+  ColorDeconvolutionKernelizer[img_, PrecompiledColorDeconvolutionKernel[ kernel_, dyes : {Dye[v1_], Dye[v2_], Dye[v3_]}], opts___] := DynamicModule[
+    {
+      p1, p2, p3, colorBox, img1, img2, img3, update, kernelC, showImg,
+      cdResult, statistic
+    },
+    colorBox[p_] := Graphics[{RGBColor @@ toRGBTripleInv[p], Rectangle[]}, ImageSize -> 500/3];
+    update[] :=
+        (
+          kernelC = CompileStainingKernel[Dye[toRGBTriple[#]] & /@ {p1, p2, p3}];
+          cdResult = ColorDeconvolution[img, kernelC, opts];
+          img1 = cdResult[1];
+          img2 = cdResult[2];
+          img3 = cdResult[3];
+        );
+    showImg[i_Image] := Show[ImageAdjust[i],ImageSize->256];
+    showImg[__] := Graphics[{}, Frame -> True, ImageSize -> ImageDimensions[img], Axes -> False, FrameTicks -> None];
+    statistic[i_Integer] := If[Head[cdResult] === ColorDeconvolutionResult,
+      With[
+        {
+          d = 255 * Flatten[cdResult[[1, i]]]
+        },
+        Row[Round[#, .001]& /@ {Min[d], Max[d], Mean[d]}, Spacer[15]]
+      ], "Unknown"
+    ];
+    {p1, p2, p3} = fromRGBTriple /@ (CreateStainingKernel[dyes]);
+    update[];
+    Deploy@Panel@Grid[{
+      {
+        LocatorPane[Dynamic[{p1, p2, p3}, {Automatic, Automatic, update[] &}], backGr, {{0, 0}, {Pi / 2, Pi / 2}}, Appearance -> {"(1)", "(2)", "(3)"}],
+        Grid[{{Show[img, ImageSize -> 256], Dynamic@showImg[img1]}, {Dynamic@showImg[img2], Dynamic@showImg[img3]}}]
+      },
+      {
+        Grid[{{Dynamic[colorBox[p1]], Dynamic[colorBox[p2]], Dynamic[colorBox[p3]]}}],
+        Grid[
+          {
+            {"Min/Max/Mean Value Vector 1:", Dynamic@statistic[1]},
+            {"Min/Max/Mean Value Vector 2:", Dynamic@statistic[2]},
+            {"Min/Max/Mean Value Vector 3:", Dynamic@statistic[3]},
+            {Button["Copy Kernel", CopyToClipboard[kernelC[[-1]]]]}
+          }, Frame -> All
+        ]
+      }
+    }, Frame -> All
+    ]
+  ];
+];
+
 
 End[]; (* `Private` *)
 
