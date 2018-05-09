@@ -50,7 +50,7 @@ SystemOptions["ParallelOptions" -> "ParallelThreadNumber"]
 
 The following shows the running-time of the `ColorDeconvolution` on with an image of size 2048 x 2048 on a Mac Pro 2,7 GHz 12-Core Intel Xeon E5.
 
-![performance](http://i.stack.imgur.com/Ljj81.png)
+![performance](http://i.stack.imgur.com/gcu6b.png)
 
 ## Other Implementations
 
