@@ -31,25 +31,10 @@ ClipData::usage = "ClipData is an option for ColorDeconvolution. If set to True,
 ColorDeconvolutionResult::usage = "ColorDeconvolutionResult[...] is an object that contains the result from a ColorDeconvolution.";
 Staining::usage = "Staining[name] a set of predefined stainings";
 Dye::usage = "Dye[{r,g,b}] defines the (subtractive) color value for one specific dye. This can included in a Staining, which consists of 1-3 dyes.";
-ColorDeconvolutionKernelizer::usage = "ColorDeconvolutionKernelizer[img, precompiledKernel, opts] creates a dynamic view for adjusting dye colors.";
+DynamicStainingInspector::usage = "DynamicStainingInspector[img, staining, opts] creates a dynamic view for adjusting dye colors.";
 UpdateColorDeconvolutionCompletions::usage = "UpdateColorDeconvolutionCompletions[] will update the auto-completion of the front end." <>
     "Therefore, if you used your own definitions like Staining[nameString] = {Dye[..], Dye[..], Dye[..]} the will be included in the list of " <>
     "suggestions. The same works for Dye[dyeName] = ... .";
-(* TODO: Check if the compile target is tested correctly
-* make the FE completions load automatically from the DownValues
-* remove CompileStainingKernel and make functions consistent
-* check if Brightfield and Darkfield calculates correctly
-* ColorDeconvolutionKernelizer should take also only Dyes and not a kernel
-* UpdateStaining[] := With[
-  {stains =
-    Cases[DownValues[Staining],
-     Verbatim[HoldPattern][Staining[str_String]] :> str, 2],
-   dyes =
-    Cases[DownValues[Dye],
-     Verbatim[HoldPattern][Dye[str_String]] :> str, 2]},
-  {stains, dyes}
-  ]
-* *)
 
 Begin["`Private`"];
 
@@ -106,6 +91,7 @@ UpdateColorDeconvolutionCompletions[] := With[
   addCompletions["Dye" -> {$dyeNames}];
   addCompletions["Staining" -> {$stainingNames}];
 ];
+UpdateColorDeconvolutionCompletions[];
 
 (* ::Section:: *)
 (* ColorDeconvolution implementation *)
@@ -121,7 +107,23 @@ ColorDeconvolutionResult /:
         BoxForm`SummaryItem[{"Image Dimension: ", Reverse@Dimensions[First[data]]}]
       },
       {},
-      form
+      form,
+      "Interpretable" -> Automatic
+    ];
+
+Dye /: MakeBoxes[expr : Dye[{r_?NumericQ, g_?NumericQ, b_?NumericQ}], form : (StandardForm | TraditionalForm)] :=
+    BoxForm`ArrangeSummaryBox[
+      Dye,
+      expr,
+      ColorDeconvolution`Private`VisualiseStaining[{expr}],
+      {
+        { BoxForm`SummaryItem[{"Red: ", r}] },
+        { BoxForm`SummaryItem[{"Green: ", g}] },
+        { BoxForm`SummaryItem[{"Blue: ", b}] }
+      },
+      {},
+      form,
+      "Interpretable" -> True
     ];
 
 ColorDeconvolutionResult[data_List, _][n_ /; 1 <= n <= 3] := Image[data[[n]], "Real"];
@@ -212,10 +214,14 @@ CreateStainingKernel[stain : {_Dye..}] := Module[
   result
 ];
 
+(* Small helper for creating color icons of dyes that are used in the StandardForm *)
 VisualiseStaining[ColorDeconvolutionKernel[_, stain_]] := VisualiseStaining[stain];
 VisualiseStaining[dyes : {_Dye..}] := Graphics[
   Table[{RGBColor[1 - #] & @@ dyes[[i]], Rectangle[{i, 0}]}, {i,
-    Length[dyes]}]
+    Length[dyes]}], ImageSize -> Dynamic[{
+    Automatic,
+    3.5 CurrentValue["FontCapHeight"] / AbsoluteCurrentValue[Magnification]
+  }]
 ];
 
 colorizeStaining[data_, Dye[col_]] := With[
@@ -246,7 +252,8 @@ ColorDeconvolutionKernel /:
         MatrixForm[Identity @@@ dyes]
       }
       ,
-      form
+      form,
+      "Interpretable" -> True
     ];
 
 (* Takes care to fill and normalize a color deconvolution kernel *)
@@ -332,8 +339,8 @@ With[
       ImageSize -> 512,
       PlotRangePadding -> None, ImagePadding -> None]
   },
-  ColorDeconvolutionKernelizer[img_ /; validImageQ[img], dyes : {_Dye..}, opts___] := ColorDeconvolutionKernelizer[img, CreateStainingKernel[dyes], opts];
-  ColorDeconvolutionKernelizer[img_, ColorDeconvolutionKernel[ kernel_, dyes : {Dye[v1_], Dye[v2_], Dye[v3_]}], opts___] := DynamicModule[
+  DynamicStainingInspector[img_ /; validImageQ[img], dyes : {_Dye..}, opts___] := DynamicStainingInspector[img, CreateStainingKernel[dyes], opts];
+  DynamicStainingInspector[img_, ColorDeconvolutionKernel[ kernel_, dyes : {Dye[v1_], Dye[v2_], Dye[v3_]}], opts___] := DynamicModule[
     {
       p1, p2, p3, colorBox, img1, img2, img3, update, kernelC, showImg,
       cdResult, statistic
