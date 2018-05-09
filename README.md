@@ -7,18 +7,37 @@ The `ColorDeconvolution` will happily work with even very large histological ima
 ## Introduction
 
 Color Deconvolution is a method that extracts stain intensities from histological RGB images.
-To obtain meaningful results, the staining needs to follow the 
-[Beer-Lambert law](https://en.wikipedia.org/wiki/Beer%E2%80%93Lambert_law)
-and therefore, that the absorbance of the single dyes are proportional to their concentration.
+So if you have an e.g. H&E stained sample, the algorithm aims to recover the Hematoxylin and the Eosin portions into separate
+images.
+In theory, the staining needs to follow the [Beer-Lambert law](https://en.wikipedia.org/wiki/Beer%E2%80%93Lambert_law)
+that states that the absorbance of the single dyes are proportional to their concentration.
+However, in practice, it is not uncommon to use the algorithm even with dyes that don't follow this law like the DAB staining.
 
-Therefore, a microscopic image of a stained histological section follows the process of white light that is transmitted
-through the section and each dye absorbs a characteristic portion that depends on the concentration of the dye and its color.
-Using the characteristic color-vectors for the staining, this operation can be inverted and result are intensity-images
-for each used dye.
+Therefore, a microscopic image of a stained histological section is regarded as the process of transmitting white light 
+through the sample, where each dye absorbs a characteristic portion that depends on the concentration of the dye and its color.
+Using the characteristic color-vectors for a staining, this operation can be inverted and the algorithm is able to separate
+the concentration of each dye in the image.
+The result of this approach are intensity-images for each used dye.
 
 To obtain excellent results, each step in the process of acquiring an image must be carefully revised to ensure 
 consistent lighting, white-balance, and correct camera settings. A basic tutorial can be found in 
 ["How to correct background illumination in brightfield microscopy"](http://imagejdocu.tudor.lu/doku.php?id=howto:working:how_to_correct_background_illumination_in_brightfield_microscopy).
+The acquired bright- and dark-images mentioned in the above article can used as an optional setting to the `ColorDeconvolution`
+function that will then take care of correcting the background.
+
+## Installation
+
+I will soon include the package on our community [paclet server]() but for now, download the repository and copy the contents
+of the `ColorDeconvolution` sub-folder to a folder in the `$Path` of Mathematica.
+The usual place to put packages is
+
+```mathematica
+FileNameJoin[{$UserBaseDirectory, "Applications"}]
+```
+
+## Usage
+
+
 
 ## Performance
 
@@ -50,7 +69,9 @@ SystemOptions["ParallelOptions" -> "ParallelThreadNumber"]
 
 The following shows the running-time of the `ColorDeconvolution` on with an image of size 2048 x 2048 on a Mac Pro 2,7 GHz 12-Core Intel Xeon E5.
 
-![performance](http://i.stack.imgur.com/gcu6b.png)
+![performance](http://i.stack.imgur.com/Kl6vP.png)
+
+ 
 
 ## Other Implementations
 
