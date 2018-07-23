@@ -29,7 +29,7 @@ function that will then take care of correcting the background.
 
 I will soon include the package on our community [paclet server]() but for now, download the repository and copy the contents
 of the `ColorDeconvolution` sub-folder to a folder in the `$Path` of Mathematica.
-The usual place to put packages is
+The usual place to put packages in is
 
 ```mathematica
 FileNameJoin[{$UserBaseDirectory, "Applications"}]
