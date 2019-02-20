@@ -27,6 +27,16 @@ function that will then take care of correcting the background.
 
 ## Installation
 
+### Mathematica versions 11.2+
+
+Install the package directly as paclet from the [releases section]() on GitHub
+
+```mma
+PacletInstall[".."]
+```
+
+
+
 I will soon include the package on our community [paclet server]() but for now, download the repository and copy the contents
 of the `ColorDeconvolution` sub-folder to a folder in the `$Path` of Mathematica.
 The usual place to put packages in is

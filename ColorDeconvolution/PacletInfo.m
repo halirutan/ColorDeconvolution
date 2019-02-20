@@ -1,7 +1,7 @@
 Paclet[
   Name -> "ColorDeconvolution",
-  Version -> "1.0",
-  MathematicaVersion -> "11+",
+  Version -> "2019.1",
+  MathematicaVersion -> "10+",
   Description -> "Fast Color Deconvolution for histological images with Mathematica",
   Creator -> "Patrick Scheibe",
   Extensions ->

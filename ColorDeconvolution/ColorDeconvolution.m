@@ -98,11 +98,11 @@ UpdateColorDeconvolutionCompletions[];
 
 (* Nice rendering of precompiled kernel *)
 ColorDeconvolutionResult /:
-    MakeBoxes[cd : ColorDeconvolutionResult[data_, kernel_], form : (StandardForm | TraditionalForm)] :=
+    MakeBoxes[cd : ColorDeconvolutionResult[data_?TensorQ, kernel_ColorDeconvolutionKernel], form : (StandardForm | TraditionalForm)] :=
     BoxForm`ArrangeSummaryBox[
       ColorDeconvolutionResult,
       Null,
-      ColorDeconvolution`Private`VisualiseStaining[kernel],
+      VisualiseStaining[kernel],
       {
         BoxForm`SummaryItem[{"Image Dimension: ", Reverse@Dimensions[First[data]]}]
       },
@@ -115,7 +115,7 @@ Dye /: MakeBoxes[expr : Dye[{r_?NumericQ, g_?NumericQ, b_?NumericQ}], form : (St
     BoxForm`ArrangeSummaryBox[
       Dye,
       expr,
-      ColorDeconvolution`Private`VisualiseStaining[{expr}],
+      VisualiseStaining[{expr}],
       {
         { BoxForm`SummaryItem[{"Red: ", r}] },
         { BoxForm`SummaryItem[{"Green: ", g}] },
@@ -244,7 +244,7 @@ ColorDeconvolutionKernel /:
     BoxForm`ArrangeSummaryBox[
       ColorDeconvolutionKernel,
       kernel,
-      ColorDeconvolution`Private`VisualiseStaining[kernel],
+      VisualiseStaining[kernel],
       {
         BoxForm`SummaryItem[{"Colors: ", Length[dyes]}]
       },
